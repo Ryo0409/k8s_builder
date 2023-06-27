@@ -20,6 +20,6 @@ export AWS_SECRET_ACCESS_KEY='YYYYYYY'
 - 以下コマンドを実行する。
 ```
 git clone https://github.com/Ryo0409/k8s_builder.git
-cd ansible
+cd k8s_builder/ansible/
 ansible-playbook -i inventory/aws_ec2.yml playbooks/install_k8s.yaml -e target=all
 ```
