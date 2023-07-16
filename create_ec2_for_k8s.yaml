@@ -1,52 +1,70 @@
-Description: Create t3.small amazon linux ec2 instance at us-east-1 region for kubernetes and flannel.
+Description: Create t3.small amazon linux ec2 instance at us-east-1 region for kubernetes cluster
 Parameters:
   # MetaData
   Prefix:
-    Description: Input Prefix for Resource Name.
+    Description: Input prefix for every resources name.
     Type: String
     Default: test
-  # VPC
-  VpcCidrBlock:
-    Description: Input a VPC IPv4 CidrBlock. ex) 192.168.1.0/24
-    Type: String
-    Default: 192.168.1.0/24
-  # Subnet
-  PublicSubnetCidrBlock:
-    Description: Input a Public Subnet IPv4 CidrBlock.  ex) 192.168.1.0/25
-    Type: String
-    Default: 192.168.1.0/25
   # EC2 keypair
   EC2KeyName:
-    Description: Input a Key name. This Parameter will be a Name tag.
+    Description: Input a key name for bastion.
     Type: AWS::EC2::KeyPair::KeyName
-  # Number of EC2
-  WorkerNum:
-    Description: Input number of EC2 for Worker.
+  # Source IP for bastion access
+  SourceIPforBastionAccess:
+    Description: Input source IP address for bastion access.
+    Type: String
+    Default: 0.0.0.0/24
+  # Number of EC2 for K8s Worker
+  K8sWorkerNum:
+    Description: Input number of EC2 for Kubernetes Worker.
     Type: Number
     Default: 2
+  # User for K8s nodes
+  MyUser:
+    Description: Input username for Kubernetes node.
+    Type: String
+  # User password for K8s nodes
+  MyUserPassword:
+    Description: Input user password for Kubernetes node.
+    Type: String
+
 Resources:
   # VPC
   MyVPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: !Ref VpcCidrBlock
+      CidrBlock: 192.168.0.0/16
       EnableDnsHostnames: true
       EnableDnsSupport: true
       InstanceTenancy: default
       Tags:
         - Key: Name
           Value: !Sub "${Prefix}_vpc"
-  # Subnet
+
+  # Public Subnet
   MyPublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: "us-east-1a"
-      CidrBlock: !Ref PublicSubnetCidrBlock
+      CidrBlock: 192.168.0.0/24
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}_subnet"
+          Value: !Sub "${Prefix}_public_subnet"
       VpcId: !Ref MyVPC
+
+  # Private Subnet
+  MyPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-east-1a"
+      CidrBlock: 192.168.1.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}_private_subnet"
+      VpcId: !Ref MyVPC
+
   # IGW
   MyInternetGW:
     Type: AWS::EC2::InternetGateway
@@ -59,8 +77,26 @@ Resources:
     Properties:
       InternetGatewayId: !Ref MyInternetGW
       VpcId: !Ref MyVPC
-  # RouteTable
-  MyRouteTable:
+
+  # NATGW
+  MyNatGWEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  MyNatGW:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - MyNatGWEIP
+          - AllocationId
+      SubnetId: !Ref MyPublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}_natgw"
+
+  # RouteTable for Public Subnet
+  MyPublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       Tags:
@@ -72,14 +108,35 @@ Resources:
     Properties:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref MyInternetGW
-      RouteTableId: !Ref MyRouteTable
-  MySubnetRouteTableAssociation:
+      RouteTableId: !Ref MyPublicRouteTable
+  MyPublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      RouteTableId: !Ref MyRouteTable
+      RouteTableId: !Ref MyPublicRouteTable
       SubnetId: !Ref MyPublicSubnet
-  # EC2 (AMI ID is for the us-east-1 region)
-  MyEC2InstanceConfig:
+
+  # RouteTable for Private Subnet
+  MyPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}_rt"
+      VpcId: !Ref MyVPC
+  MyPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref MyNatGW
+      RouteTableId: !Ref MyPrivateRouteTable
+  MyPrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref MyPrivateRouteTable
+      SubnetId: !Ref MyPrivateSubnet
+
+  # Bastion EC2 
+  MyBastionEC2InstanceConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
       ImageId: ami-026b57f3c383c2eec
@@ -87,7 +144,7 @@ Resources:
       InstanceType: t3.small
       AssociatePublicIpAddress: "true"
       SecurityGroups:
-        - !Ref MySecurityGroup
+        - !Ref MyBastionSecurityGroup
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
@@ -95,57 +152,113 @@ Resources:
             VolumeSize: '30'
       UserData: !Base64 |
         #!/bin/bash -x
-        sudo yum update -y
-        sudo yum install -y python-pip
-        sudo pip install boto boto3 botocore
-        sudo amazon-linux-extras enable ansible2
-        sudo yum install -y ansible
-        sudo ansible-galaxy collection install ansible.posix
-        sudo ansible-galaxy collection install community.general
-        sudo yum install -y git
-        sudo yum install -y jq
-  # Security Group
-  MySecurityGroup:
+        yum update -y
+        yum install -y python-pip
+        pip install boto boto3 botocore
+        amazon-linux-extras enable ansible2
+        yum install -y ansible
+        ansible-galaxy collection install ansible.posix
+        ansible-galaxy collection install community.general
+        yum install -y git
+        yum install -y jq
+  MyBastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub "${Prefix}_sg"
-      GroupDescription: Allow all TCP and Flannnel VXLAN access
+      GroupName: !Sub "${Prefix}_bastion_sg"
+      GroupDescription: Allow SSH for Bastion
       VpcId: !Ref MyVPC
       SecurityGroupIngress:
-        # all tcp
+        # SSH
         - IpProtocol: tcp
-          FromPort: 0
-          ToPort: 65535
-          CidrIp: 0.0.0.0/0
-        # udp for flannel vxlan
-        - IpProtocol: udp
-          FromPort: 8472
-          ToPort: 8472
-          CidrIp: 0.0.0.0/0
-  # Auto Scaling Group
-  MyAutoScalingGroupForController:
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SourceIPforBastionAccess
+  MyAutoScalingGroupForBastion:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
         - !Ref MyPublicSubnet
-      LaunchConfigurationName: !Ref MyEC2InstanceConfig
+      LaunchConfigurationName: !Ref MyBastionEC2InstanceConfig
       MinSize: 1
       MaxSize: 1
       DesiredCapacity: 1
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}-ec2-controller"
+          Value: !Sub "${Prefix}-ec2-bastion"
           PropagateAtLaunch: true
+
+  # EC2 for Kubernetes Nodes
+  MyK8sEC2InstanceConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: ami-026b57f3c383c2eec
+      KeyName: !Ref EC2KeyName
+      InstanceType: t3.small
+      AssociatePublicIpAddress: "false"
+      SecurityGroups:
+        - !Ref MyK8sSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: '30'
+      UserData:
+        Fn::Base64: !Sub
+          - | 
+            #!/bin/bash
+            yum update -y
+            yum install -y python-pip
+            pip install boto boto3 botocore
+            amazon-linux-extras enable ansible2
+            yum install -y ansible
+            ansible-galaxy collection install ansible.posix
+            ansible-galaxy collection install community.general
+            yum install -y git
+            yum install -y jq
+            useradd ${MyUser} -G wheel
+            echo "${MyUser}:${MyUserPassword}" | chpasswd
+            sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+            systemctl restart sshd
+          - {
+              MyUser: !Ref MyUser,
+              MyUserPassword: !Ref MyUserPassword
+            }
+  MyK8sSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Prefix}_k8s_sg"
+      GroupDescription: Allow all connection
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+  MyAutoScalingGroupForK8sController:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref MyPrivateSubnet
+      LaunchConfigurationName: !Ref MyK8sEC2InstanceConfig
+      MinSize: 1
+      MaxSize: 1
+      DesiredCapacity: 1
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-ec2-k8s-controller"
+          PropagateAtLaunch: true
+    DependsOn: MyNatGW
   MyAutoScalingGroupForWorker:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
-        - !Ref MyPublicSubnet
-      LaunchConfigurationName: !Ref MyEC2InstanceConfig
-      MinSize: !Ref WorkerNum
-      MaxSize: !Ref WorkerNum
-      DesiredCapacity: !Ref WorkerNum
+        - !Ref MyPrivateSubnet
+      LaunchConfigurationName: !Ref MyK8sEC2InstanceConfig
+      MinSize: !Ref K8sWorkerNum
+      MaxSize: !Ref K8sWorkerNum
+      DesiredCapacity: !Ref K8sWorkerNum
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}-ec2-worker"
+          Value: !Sub "${Prefix}-ec2-k8s-worker"
           PropagateAtLaunch: true
+    DependsOn: MyNatGW
