@@ -13,7 +13,7 @@ Parameters:
   SourceIPforBastionAccess:
     Description: Input source IP address for bastion access.
     Type: String
-    Default: 0.0.0.0/24
+    Default: 0.0.0.0/0
   # Number of EC2 for K8s Worker
   K8sWorkerNum:
     Description: Input number of EC2 for Kubernetes Worker.
