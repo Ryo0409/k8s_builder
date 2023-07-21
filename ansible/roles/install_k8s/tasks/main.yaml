@@ -42,34 +42,34 @@
 
 - name: Create directory for kubernetes admin file
   file:
-    path: "/home/ec2-user/.kube/"
+    path: '/home/{{ ansible_ssh_user }}/.kube/'
     state: directory
   become: true
 
-- name: Copy kubernetes admin file to ec2-user home directory of controller
+- name: Copy kubernetes admin file to operation user home directory of controller
   copy:
-    src: /etc/kubernetes/admin.conf
-    dest: /home/ec2-user/.kube/config
-    owner: ec2-user
-    group: ec2-user
+    src: '/etc/kubernetes/admin.conf'
+    dest: '/home/{{ ansible_ssh_user }}/.kube/config'
+    owner: '{{ ansible_ssh_user }}'
+    group: '{{ ansible_ssh_user }}'
     remote_src: yes
   become: true
   when: '"controller" in group_names'
 
 - name: Fetch the k8s admin file
   fetch:
-    src: /home/ec2-user/.kube/config
-    dest: /tmp/config
+    src: '/home/{{ ansible_ssh_user }}/.kube/config'
+    dest: '/tmp/config'
     flat: yes
   become: true
   when: '"controller" in group_names'
 
-- name: Copy kubernetes admin file to ec2-user home directory of wokers
+- name: Copy kubernetes admin file to operation user home directory of wokers
   copy:
-    src: /tmp/config
-    dest: /home/ec2-user/.kube/config
-    owner: ec2-user
-    group: ec2-user
+    src: '/tmp/config'
+    dest: '/home/{{ ansible_ssh_user }}/.kube/config'
+    owner: '{{ ansible_ssh_user }}'
+    group: '{{ ansible_ssh_user }}'
   become: true
   when: '"worker" in group_names'
 
