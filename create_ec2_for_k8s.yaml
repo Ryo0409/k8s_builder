@@ -1,4 +1,4 @@
-Description: Create t3.small amazon linux ec2 instance at us-east-1 region for kubernetes cluster
+Description: Create t3.small amazon linux ec2 instance for kubernetes cluster
 Parameters:
   # MetaData
   Prefix:
@@ -27,6 +27,11 @@ Parameters:
   MyUserPassword:
     Description: Input user password for Kubernetes node.
     Type: String
+  # AMI ID for EC2
+  MyEC2AmiId:
+    Description: Input EC2 Ami ID for Kubernetes node.
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
 
 Resources:
   # VPC
@@ -135,11 +140,58 @@ Resources:
       RouteTableId: !Ref MyPrivateRouteTable
       SubnetId: !Ref MyPrivateSubnet
 
+  # IAM
+  MyAnsibleDynamicInventoryRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+      RoleName: !Sub "${Prefix}_ansible_dynamic_inventory_role"
+  MyAnsibleDynamicInventoryInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+      - !Ref MyAnsibleDynamicInventoryRole
+
+  MyEBSCSIDriverRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+      RoleName: !Sub "${Prefix}_ebs_csi_driver_role"
+  MyEBSCSIDriverInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+      - !Ref MyEBSCSIDriverRole
+
   # Bastion EC2 
   MyBastionEC2InstanceConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: ami-026b57f3c383c2eec
+      ImageId: !Ref MyEC2AmiId
       KeyName: !Ref EC2KeyName
       InstanceType: t3.small
       AssociatePublicIpAddress: "true"
@@ -150,6 +202,7 @@ Resources:
           Ebs:
             VolumeType: gp2
             VolumeSize: '30'
+      IamInstanceProfile: !Ref MyAnsibleDynamicInventoryInstanceProfile
       UserData: !Base64 |
         #!/bin/bash -x
         yum update -y
@@ -191,7 +244,7 @@ Resources:
   MyK8sEC2InstanceConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: ami-026b57f3c383c2eec
+      ImageId: !Ref MyEC2AmiId
       KeyName: !Ref EC2KeyName
       InstanceType: t3.small
       AssociatePublicIpAddress: "false"
@@ -202,6 +255,7 @@ Resources:
           Ebs:
             VolumeType: gp2
             VolumeSize: '30'
+      IamInstanceProfile: !Ref MyEBSCSIDriverInstanceProfile
       UserData:
         Fn::Base64: !Sub
           - | 
