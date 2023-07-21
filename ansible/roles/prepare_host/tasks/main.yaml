@@ -60,9 +60,9 @@
     enabled: true
   become: true
 
-- name: Add the ec2-user to docker group
+- name: Add the operation user to docker group
   user:
-    name: ec2-user
+    name: '{{ ansible_ssh_user }}'
     group: docker
   become: true
 
